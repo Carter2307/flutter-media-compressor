@@ -1,5 +1,74 @@
 # Changelog — Image Utility
 
+## [0.3.0] - 2026-03-30
+
+### Historique partagé + Page d'accueil
+
+#### Système d'historique (API partagée)
+- **Stockage** : fichier JSON (`history.json`) + fichiers résultats dans `{appDocDir}/history/` — 0 nouvelle dépendance de stockage
+- `HistoryEntry` : modèle avec id, nom original, chemin résultat, type, date, tailles (original/résultat)
+- `HistoryService` : lecture/écriture JSON + sauvegarde des buffers sur disque
+  - `add()` — écrit le fichier + ajoute au JSON
+  - `getAll()` / `getResultBytes()` / `remove()` / `clear()`
+  - `groupByType()` — groupement par utilitaire
+- `HistoryProvider` : `AsyncNotifierProvider` Riverpod, utilisable par toutes les features
+- Fichiers : `lib/core/history/history_entry.dart`, `history_service.dart`, `history_provider.dart`
+
+#### Page d'accueil refaite
+- Grille 2x2 des outils (Image, Vidéo, Fond, PDF) avec navigation
+- Entrées historiques groupées par type avec icône de section
+- Chaque entrée : thumbnail (chargé depuis le disque), nom, taille, date
+- État vide : message centré
+- Fichier : `lib/features/history/presentation/screens/history_screen.dart`
+
+#### Intégration background_removal → historique
+- Après sauvegarde galerie réussie → ajout automatique dans l'historique
+- Le buffer résultat est stocké sur disque pour consultation ultérieure
+
+#### Dépendance ajoutée
+- `intl` — formatage des dates
+
+---
+
+## [0.2.0] - 2026-03-30
+
+### Suppression de fond (feature complète)
+
+#### Dépendances ajoutées
+- `image_picker` — sélection d'image depuis la galerie
+- `image_gallery_saver_plus` — sauvegarde dans la galerie
+- `permission_handler` — gestion des permissions système
+
+#### API
+- Connecté à l'API FastAPI locale (`http://localhost:8000`)
+- Endpoint : `POST /api/remove-background` (multipart, query param `processor=birefnet`)
+- Réponse en bytes (PNG)
+- Endpoints également référencés : `/api/compress`, `/api/resize`, `/api/upscale`
+
+#### Architecture (Clean Architecture)
+- **Domain** : `BgRemovalState` avec statuts (idle, picking, processing, done, error) et types de fond (transparent, blanc, noir)
+- **Data** : `BgRemovalRepository` — pick image, appel API remove.bg, application de fond coloré, sauvegarde galerie
+- **Presentation** : `BgRemovalNotifier` (StateNotifier) + `bgRemovalProvider`
+
+#### UI — Design minimaliste
+- **État idle** : écran centré avec icône + bouton "Choisir une photo"
+- **État processing** : loader circulaire + texte
+- **État résultat** :
+  - Preview image avec damier de transparence (CustomPainter)
+  - Toggle Original / Résultat (chips animés)
+  - Sélecteur de type de fond : Transparent (damier), Blanc, Noir
+  - Bouton "Enregistrer dans la galerie" (ElevatedButton)
+  - Bouton "Copier dans le presse-papier" (OutlinedButton)
+- **État erreur** : message + bouton réessayer
+- Bouton refresh dans l'AppBar pour recommencer
+- Fichiers :
+  - `lib/features/background_removal/domain/bg_removal_state.dart`
+  - `lib/features/background_removal/data/bg_removal_repository.dart`
+  - `lib/features/background_removal/presentation/providers/bg_removal_provider.dart`
+  - `lib/features/background_removal/presentation/screens/background_removal_screen.dart`
+
+---
+
 ## [0.1.0] - 2026-03-30
 
 ### Setup initial du projet

@@ -1,6 +1,8 @@
 import os
 import io
 import logging
+import tempfile
+import shutil
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +12,8 @@ from contextlib import asynccontextmanager
 
 from processors import get_processor, list_processors
 from upscalers import get_upscaler, list_upscalers
-
+from moviepy import VideoFileClip
+from PIL import ImageOps
 
 # Configuration via environment variables
 PORT = int(os.environ.get("PORT", "8000"))
@@ -113,7 +116,8 @@ async def read_and_validate_image(file: UploadFile) -> Image.Image:
         )
 
     try:
-        image = Image.open(io.BytesIO(contents))
+        from PIL import ImageOps
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(contents)))    
         if image.width > MAX_RESOLUTION or image.height > MAX_RESOLUTION:
             raise HTTPException(
                 status_code=400,
@@ -402,6 +406,61 @@ async def remove_object(
         logger.error(f"Error removing object: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error removing object: {str(e)}")
 
+
+
+ALLOWED_VIDEO_EXTENSIONS = {"mp4", "mov", "avi", "mkv"}
+
+@app.post("/api/compress-video")
+async def compress_video(
+    file: UploadFile = File(...),
+    quality: str = Query(default="medium")
+):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_in:
+        shutil.copyfileobj(file.file, temp_in)
+        temp_input_path = temp_in.name
+
+    temp_output_path = temp_input_path.replace(".mp4", "_compressed.mp4")
+
+    try:
+        clip = VideoFileClip(temp_input_path)
+        
+        settings = {
+            "low": {"w": 360, "bitrate": "500k"},
+            "medium": {"w": 480, "bitrate": "1000k"},
+            "high": {"w": 720, "bitrate": "2500k"}
+        }
+        target = settings.get(quality, settings["medium"])
+
+        
+        if clip.w > target["w"]:
+            clip = clip.resized(width=target["w"])  
+
+        clip.write_videofile(
+            temp_output_path,
+            codec="libx264",
+            audio_codec="aac",
+            bitrate=target["bitrate"],
+            preset="ultrafast", 
+            logger=None  
+        )
+        clip.close()
+
+        def iterfile():
+            with open(temp_output_path, "rb") as f:
+                yield from f
+            os.remove(temp_input_path)
+            os.remove(temp_output_path)
+
+        return StreamingResponse(
+            iterfile(),
+            media_type="video/mp4",
+            headers={"Content-Disposition": "attachment; filename=compressed.mp4"}
+        )
+
+    except Exception as e:
+        if os.path.exists(temp_input_path): os.remove(temp_input_path)
+        logger.error(f"Erreur vidéo : {e}")
+        raise HTTPException(status_code=500, detail=str(e)) 
 
 if __name__ == "__main__":
     import uvicorn

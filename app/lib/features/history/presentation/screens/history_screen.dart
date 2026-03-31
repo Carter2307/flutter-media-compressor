@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/history/history_entry.dart';
 import '../../../../core/history/history_provider.dart';
@@ -232,16 +233,25 @@ class _HistoryTile extends ConsumerWidget {
                   child: SizedBox(
                     width: 48,
                     height: 48,
-                    child: file.existsSync()
-                        ? Image.file(file, fit: BoxFit.cover)
-                        : Container(
-                            color: theme.colorScheme.surfaceContainerLow,
-                            child: Icon(
-                              Icons.broken_image_outlined,
-                              size: 20,
-                              color: theme.colorScheme.onSurfaceVariant,
+                    child: entry.type == HistoryType.pdf
+                        ? Container(
+                            color: const Color(0xFFD84315).withValues(alpha: 0.1),
+                            child: const Icon(
+                              Icons.picture_as_pdf_rounded,
+                              size: 24,
+                              color: Color(0xFFD84315),
                             ),
-                          ),
+                          )
+                        : file.existsSync()
+                            ? Image.file(file, fit: BoxFit.cover)
+                            : Container(
+                                color: theme.colorScheme.surfaceContainerLow,
+                                child: Icon(
+                                  Icons.broken_image_outlined,
+                                  size: 20,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
                   ),
                 ),
                 const SizedBox(width: AppSpacing.sm),
@@ -345,15 +355,38 @@ class _HistoryDetailSheet extends StatelessWidget {
                     width: double.infinity,
                     constraints: const BoxConstraints(maxHeight: 350),
                     color: theme.colorScheme.surfaceContainerLow,
-                    child: file.existsSync()
-                        ? Image.file(file, fit: BoxFit.contain)
-                        : Center(
-                            child: Icon(
-                              Icons.broken_image_outlined,
-                              size: 48,
-                              color: theme.colorScheme.onSurfaceVariant,
+                    child: entry.type == HistoryType.pdf
+                        ? Padding(
+                            padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.picture_as_pdf_rounded,
+                                  size: 64,
+                                  color: const Color(0xFFD84315).withValues(alpha: 0.8),
+                                ),
+                                const SizedBox(height: AppSpacing.sm),
+                                Text(
+                                  entry.originalName,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
                             ),
-                          ),
+                          )
+                        : file.existsSync()
+                            ? Image.file(file, fit: BoxFit.contain)
+                            : Center(
+                                child: Icon(
+                                  Icons.broken_image_outlined,
+                                  size: 48,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
                   ),
                 ),
 
@@ -411,9 +444,20 @@ class _HistoryDetailSheet extends StatelessWidget {
                       child: SizedBox(
                         height: 48,
                         child: ElevatedButton.icon(
-                          onPressed: () => _saveToGallery(context),
-                          icon: const Icon(Icons.download_rounded, size: 18),
-                          label: const Text('Enregistrer'),
+                          onPressed: () => entry.type == HistoryType.pdf
+                              ? _share(context)
+                              : _saveToGallery(context),
+                          icon: Icon(
+                            entry.type == HistoryType.pdf
+                                ? Icons.share_rounded
+                                : Icons.download_rounded,
+                            size: 18,
+                          ),
+                          label: Text(
+                            entry.type == HistoryType.pdf
+                                ? 'Partager'
+                                : 'Enregistrer',
+                          ),
                           style: ElevatedButton.styleFrom(
                             shape: RoundedRectangleBorder(
                               borderRadius: AppSpacing.borderRadiusFull,
@@ -423,6 +467,22 @@ class _HistoryDetailSheet extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: AppSpacing.sm),
+                    if (entry.type != HistoryType.pdf)
+                      SizedBox(
+                        height: 48,
+                        width: 48,
+                        child: IconButton.outlined(
+                          onPressed: () => _share(context),
+                          icon: const Icon(Icons.share_rounded, size: 18),
+                          style: IconButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: AppSpacing.borderRadiusFull,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (entry.type != HistoryType.pdf)
+                      const SizedBox(width: AppSpacing.sm),
                     Expanded(
                       child: SizedBox(
                         height: 48,
@@ -488,6 +548,21 @@ class _HistoryDetailSheet extends StatelessWidget {
         ),
       );
     }
+  }
+
+  Future<void> _share(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final file = File(entry.resultPath);
+    if (!file.existsSync()) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Fichier introuvable'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    await SharePlus.instance.share(ShareParams(files: [XFile(entry.resultPath)]));
   }
 
   Future<void> _delete(BuildContext context) async {

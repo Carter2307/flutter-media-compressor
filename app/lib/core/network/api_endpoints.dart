@@ -14,6 +14,12 @@ abstract final class ApiEndpoints {
   // Upscale
   static const String upscale = '/api/upscale';
 
+  // PDF compression
+  static const String compressPdf = '/api/compress-pdf';
+
+  // PDF preview
+  static const String pdfPreview = '/api/pdf-preview';
+
   // Health
   static const String health = '/health';
 }

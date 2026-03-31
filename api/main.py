@@ -1,5 +1,6 @@
 import os
 import io
+import base64
 import logging
 import tempfile
 import shutil
@@ -34,16 +35,21 @@ MAX_RESOLUTION = 8192
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Preload default models on startup."""
-    logger.info(f"Loading default processor: {DEFAULT_PROCESSOR}")
-    get_processor(DEFAULT_PROCESSOR, preload=True)
-    logger.info("Processor loaded!")
+    """Preload default models on startup (best-effort — server starts even if models are unavailable)."""
+    try:
+        logger.info(f"Loading default processor: {DEFAULT_PROCESSOR}")
+        get_processor(DEFAULT_PROCESSOR, preload=True)
+        logger.info("Processor loaded!")
+    except Exception:
+        pass
 
-    logger.info(f"Loading default upscaler: {DEFAULT_UPSCALER}")
-    get_upscaler(DEFAULT_UPSCALER, preload=True)
-    logger.info("Upscaler loaded!")
+    try:
+        logger.info(f"Loading default upscaler: {DEFAULT_UPSCALER}")
+        get_upscaler(DEFAULT_UPSCALER, preload=True)
+        logger.info("Upscaler loaded!")
+    except Exception:
+        pass
 
-    logger.info("All models ready!")
     yield
 
 
@@ -117,7 +123,7 @@ async def read_and_validate_image(file: UploadFile) -> Image.Image:
 
     try:
         from PIL import ImageOps
-        image = ImageOps.exif_transpose(Image.open(io.BytesIO(contents)))    
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(contents)))
         if image.width > MAX_RESOLUTION or image.height > MAX_RESOLUTION:
             raise HTTPException(
                 status_code=400,
@@ -423,7 +429,7 @@ async def compress_video(
 
     try:
         clip = VideoFileClip(temp_input_path)
-        
+
         settings = {
             "low": {"w": 360, "bitrate": "500k"},
             "medium": {"w": 480, "bitrate": "1000k"},
@@ -431,17 +437,17 @@ async def compress_video(
         }
         target = settings.get(quality, settings["medium"])
 
-        
+
         if clip.w > target["w"]:
-            clip = clip.resized(width=target["w"])  
+            clip = clip.resized(width=target["w"])
 
         clip.write_videofile(
             temp_output_path,
             codec="libx264",
             audio_codec="aac",
             bitrate=target["bitrate"],
-            preset="ultrafast", 
-            logger=None  
+            preset="ultrafast",
+            logger=None
         )
         clip.close()
 
@@ -460,7 +466,143 @@ async def compress_video(
     except Exception as e:
         if os.path.exists(temp_input_path): os.remove(temp_input_path)
         logger.error(f"Erreur vidéo : {e}")
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Compress PDF ---
+
+PDF_COMPRESSION_LEVELS = {
+    "light":      {"quality": 85, "scale": 0.90},
+    "standard":   {"quality": 70, "scale": 0.75},
+    "aggressive": {"quality": 50, "scale": 0.50},
+}
+
+
+@app.post("/api/pdf-preview")
+async def pdf_preview(file: UploadFile = File(...)):
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    contents = await file.read()
+    if len(contents) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large")
+    try:
+        import fitz
+    except ImportError:
+        raise HTTPException(status_code=501, detail="pymupdf non installé")
+    try:
+        doc = fitz.open(stream=contents, filetype="pdf")
+        pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
+        preview_jpg = pix.tobytes("jpg", quality=70)
+        doc.close()
+        return {"preview_base64": base64.b64encode(preview_jpg).decode()}
+    except Exception as e:
+        logger.error(f"Erreur preview PDF: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erreur preview : {str(e)}")
+
+
+@app.post("/api/compress-pdf")
+async def compress_pdf(
+    file: UploadFile = File(...),
+    level: str = Query(default="standard", description="Compression level: light, standard, aggressive"),
+):
+    if file.content_type != "application/pdf" and not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Le fichier doit être un PDF")
+
+    if level not in PDF_COMPRESSION_LEVELS:
+        raise HTTPException(status_code=400, detail="level doit être light, standard ou aggressive")
+
+    contents = await file.read()
+    original_size = len(contents)
+
+    if original_size > 100 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Fichier trop volumineux (max 100 Mo)")
+
+    try:
+        import pikepdf
+    except ImportError:
+        raise HTTPException(status_code=501, detail="pikepdf non installé")
+
+    params = PDF_COMPRESSION_LEVELS[level]
+
+    try:
+        pdf = pikepdf.open(io.BytesIO(contents))
+
+        if level in ("standard", "aggressive"):
+            with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
+                meta.clear()
+            try:
+                pdf.docinfo.clear()
+            except Exception:
+                pass
+
+        _recompress_pdf_images(pdf, quality=params["quality"], scale=params["scale"])
+
+        compressed_buf = io.BytesIO()
+        pdf.save(compressed_buf, compress_streams=True, linearize=(level != "light"))
+        pdf.close()
+
+        compressed_size = compressed_buf.tell()
+
+        optimized = compressed_size < original_size
+        if not optimized:
+            result_bytes = contents
+        else:
+            compressed_buf.seek(0)
+            result_bytes = compressed_buf.read()
+
+        return {
+            "optimized": optimized,
+            "original_size": original_size,
+            "compressed_size": compressed_size if optimized else original_size,
+            "pdf_base64": base64.b64encode(result_bytes).decode(),
+        }
+
+    except pikepdf.PasswordError:
+        raise HTTPException(status_code=400, detail="Le PDF est protégé par un mot de passe")
+    except Exception as e:
+        logger.error(f"Erreur compression PDF: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la compression : {str(e)}")
+
+
+
+
+def _recompress_pdf_images(pdf, quality: int, scale: float = 1.0) -> None:
+    """Recompresse les images embarquées (qualité JPEG + downscale optionnel)."""
+    try:
+        import pikepdf
+        from PIL import Image as PilImage
+
+        for page in pdf.pages:
+            for _, image_obj in page.images.items():
+                try:
+                    pdf_image = pikepdf.PdfImage(image_obj)
+                    pil_img = pdf_image.as_pil_image()
+
+                    if pil_img.mode not in ("RGB", "L"):
+                        pil_img = pil_img.convert("RGB")
+
+                    if scale != 1.0:
+                        new_w = max(1, round(pil_img.width * scale))
+                        new_h = max(1, round(pil_img.height * scale))
+                        pil_img = pil_img.resize((new_w, new_h), PilImage.Resampling.LANCZOS)
+
+                    buf = io.BytesIO()
+                    pil_img.save(buf, format="JPEG", quality=quality, optimize=True)
+                    buf.seek(0)
+
+                    compressed = pikepdf.PdfImage.from_pil_image(PilImage.open(buf))
+                    image_obj.write(
+                        compressed.obj.read_raw_bytes(),
+                        filter=pikepdf.Name("/DCTDecode"),
+                    )
+                    image_obj["/ColorSpace"] = compressed.obj["/ColorSpace"]
+                    image_obj["/BitsPerComponent"] = compressed.obj["/BitsPerComponent"]
+                    image_obj["/Width"] = compressed.obj["/Width"]
+                    image_obj["/Height"] = compressed.obj["/Height"]
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -42,8 +43,13 @@ class PdfCompressionRepository {
     return (bytes, file.name, pageCount);
   }
 
-  /// Envoie le PDF au backend et retourne les bytes compressés.
-  Future<Uint8List> compress(
+  /// Envoie le PDF au backend et retourne le résultat décodé.
+  Future<({
+    Uint8List pdfBytes,
+    Uint8List previewBytes,
+    bool alreadyOptimized,
+    int compressedSize,
+  })> compress(
     Uint8List inputBytes,
     String fileName,
     PdfCompressionLevel level,
@@ -61,12 +67,25 @@ class PdfCompressionRepository {
       data: formData,
       queryParameters: {'level': level.apiValue},
       options: Options(
-        responseType: ResponseType.bytes,
+        responseType: ResponseType.json,
         contentType: 'multipart/form-data',
+        receiveTimeout: const Duration(minutes: 2),
+        sendTimeout: const Duration(minutes: 2),
       ),
     );
 
-    return Uint8List.fromList(response.data as List<int>);
+    final json = response.data as Map<String, dynamic>;
+    final status = json['status'] as String;
+    final compressedSize = json['compressed_size'] as int;
+    final pdfBytes = base64.decode(json['pdf_base64'] as String);
+    final previewBytes = base64.decode(json['preview_base64'] as String);
+
+    return (
+      pdfBytes: pdfBytes,
+      previewBytes: previewBytes,
+      alreadyOptimized: status == 'already_optimized',
+      compressedSize: compressedSize,
+    );
   }
 
   /// Enregistre le PDF dans le répertoire Documents et retourne le chemin.

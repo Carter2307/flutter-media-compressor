@@ -40,6 +40,8 @@ class PdfCompressionState {
     this.resultSizeBytes = 0,
     this.compressionLevel = PdfCompressionLevel.standard,
     this.errorMessage,
+    this.alreadyOptimized = false,
+    this.previewBytes,
   });
 
   final PdfCompressionStatus status;
@@ -50,6 +52,8 @@ class PdfCompressionState {
   final int resultSizeBytes;
   final PdfCompressionLevel compressionLevel;
   final String? errorMessage;
+  final bool alreadyOptimized;
+  final Uint8List? previewBytes;
 
   double get reductionPercent {
     if (originalSizeBytes == 0) return 0;
@@ -65,6 +69,8 @@ class PdfCompressionState {
     int? resultSizeBytes,
     PdfCompressionLevel? compressionLevel,
     String? errorMessage,
+    bool? alreadyOptimized,
+    Uint8List? previewBytes,
   }) {
     return PdfCompressionState(
       status: status ?? this.status,
@@ -75,6 +81,8 @@ class PdfCompressionState {
       resultSizeBytes: resultSizeBytes ?? this.resultSizeBytes,
       compressionLevel: compressionLevel ?? this.compressionLevel,
       errorMessage: errorMessage ?? this.errorMessage,
+      alreadyOptimized: alreadyOptimized ?? this.alreadyOptimized,
+      previewBytes: previewBytes ?? this.previewBytes,
     );
   }
 

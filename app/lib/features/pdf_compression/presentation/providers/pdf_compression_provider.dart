@@ -22,6 +22,8 @@ class PdfCompressionNotifier extends StateNotifier<PdfCompressionState> {
   final PdfCompressionRepository _repository;
   final Ref _ref;
 
+  static const int _maxFileSizeBytes = 100 * 1024 * 1024; // 100 Mo
+
   /// Bytes originaux conservés pour re-compresser lors du changement de niveau.
   Uint8List? _originalBytes;
 
@@ -35,6 +37,15 @@ class PdfCompressionNotifier extends StateNotifier<PdfCompressionState> {
     }
 
     final (bytes, name, pageCount) = picked;
+
+    if (bytes.length > _maxFileSizeBytes) {
+      state = state.copyWith(
+        status: PdfCompressionStatus.error,
+        errorMessage: 'Le fichier dépasse la limite de 100 Mo autorisée.',
+      );
+      return;
+    }
+
     _originalBytes = bytes;
 
     state = state.copyWith(
@@ -97,8 +108,10 @@ class PdfCompressionNotifier extends StateNotifier<PdfCompressionState> {
 
       state = state.copyWith(
         status: PdfCompressionStatus.done,
-        resultBytes: result,
-        resultSizeBytes: result.length,
+        resultBytes: result.pdfBytes,
+        resultSizeBytes: result.compressedSize,
+        previewBytes: result.previewBytes,
+        alreadyOptimized: result.alreadyOptimized,
       );
     } catch (e) {
       state = state.copyWith(

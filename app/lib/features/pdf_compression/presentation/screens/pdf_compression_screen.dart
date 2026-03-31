@@ -2,7 +2,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 
 import '../../../../core/theme/app_spacing.dart';
 import '../../domain/pdf_compression_state.dart';
@@ -149,12 +148,10 @@ class _ResultView extends StatelessWidget {
       children: [
         const SizedBox(height: AppSpacing.xs),
 
-        // Infos fichier
         _FileInfoCard(state: state),
 
         const SizedBox(height: AppSpacing.lg),
 
-        // Aperçu première page
         Text(
           'APERÇU',
           style: theme.textTheme.labelMedium?.copyWith(
@@ -163,11 +160,10 @@ class _ResultView extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppSpacing.sm),
-        _PdfPreview(pdfBytes: state.resultBytes!),
+        _PdfPreview(previewImageBytes: state.previewBytes!),
 
         const SizedBox(height: AppSpacing.xl),
 
-        // Sélecteur niveau
         Text(
           'NIVEAU DE COMPRESSION',
           style: theme.textTheme.labelMedium?.copyWith(
@@ -183,12 +179,15 @@ class _ResultView extends StatelessWidget {
 
         const SizedBox(height: AppSpacing.xl),
 
-        // Stats
+        if (state.alreadyOptimized) ...[
+          const _AlreadyOptimizedBanner(),
+          const SizedBox(height: AppSpacing.md),
+        ],
+
         _StatsCard(state: state),
 
         const SizedBox(height: AppSpacing.xxl),
 
-        // Bouton enregistrer
         SizedBox(
           width: double.infinity,
           height: 52,
@@ -214,9 +213,7 @@ class _ResultView extends StatelessWidget {
     final success = await notifier.save();
     messenger.showSnackBar(
       SnackBar(
-        content: Text(
-          success ? 'PDF enregistré' : 'Échec de l\'enregistrement',
-        ),
+        content: Text(success ? 'PDF enregistré' : 'Échec de l\'enregistrement'),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -241,11 +238,7 @@ class _FileInfoCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.picture_as_pdf_rounded,
-            size: 36,
-            color: theme.colorScheme.primary,
-          ),
+          Icon(Icons.picture_as_pdf_rounded, size: 36, color: theme.colorScheme.primary),
           const SizedBox(width: AppSpacing.md),
           Expanded(
             child: Column(
@@ -276,8 +269,8 @@ class _FileInfoCard extends StatelessWidget {
 // ─── PDF Preview ─────────────────────────────────────────────────────────────
 
 class _PdfPreview extends StatelessWidget {
-  const _PdfPreview({required this.pdfBytes});
-  final Uint8List pdfBytes;
+  const _PdfPreview({required this.previewImageBytes});
+  final Uint8List previewImageBytes;
 
   @override
   Widget build(BuildContext context) {
@@ -288,14 +281,49 @@ class _PdfPreview extends StatelessWidget {
       child: Container(
         height: 240,
         color: theme.colorScheme.surfaceContainerLow,
-        child: SfPdfViewer.memory(
-          pdfBytes,
-          canShowScrollHead: false,
-          canShowScrollStatus: false,
-          enableDoubleTapZooming: false,
-          pageLayoutMode: PdfPageLayoutMode.single,
-          initialPageNumber: 1,
+        child: Image.memory(
+          previewImageBytes,
+          fit: BoxFit.contain,
+          width: double.infinity,
         ),
+      ),
+    );
+  }
+}
+
+// ─── Already Optimized Banner ─────────────────────────────────────────────────
+
+class _AlreadyOptimizedBanner extends StatelessWidget {
+  const _AlreadyOptimizedBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Container(
+      padding: AppSpacing.paddingAllMd,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.secondaryContainer,
+        borderRadius: AppSpacing.borderRadiusMedium,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.info_outline_rounded,
+            size: 20,
+            color: theme.colorScheme.onSecondaryContainer,
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              'Ce PDF est déjà optimisé, aucune compression pertinente n\'a pu être appliquée.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSecondaryContainer,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -348,7 +376,21 @@ class _StatsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final reduction = state.reductionPercent;
-    final gained = reduction > 0;
+    final gained = !state.alreadyOptimized && reduction > 0;
+
+    final afterValue = state.alreadyOptimized
+        ? _formatSize(state.originalSizeBytes)
+        : _formatSize(state.resultSizeBytes);
+    final reductionValue = state.alreadyOptimized
+        ? '—'
+        : gained
+            ? '-${reduction.toStringAsFixed(1)}%'
+            : '${reduction.toStringAsFixed(1)}%';
+    final reductionColor = state.alreadyOptimized
+        ? theme.colorScheme.onSurfaceVariant
+        : gained
+            ? Colors.green.shade600
+            : theme.colorScheme.onSurface;
 
     return Container(
       padding: AppSpacing.paddingAllMd,
@@ -359,28 +401,18 @@ class _StatsCard extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: _StatCell(
-              label: 'Avant',
-              value: _formatSize(state.originalSizeBytes),
-            ),
+            child: _StatCell(label: 'Avant', value: _formatSize(state.originalSizeBytes)),
           ),
           Container(width: 1, height: 40, color: theme.dividerColor),
           Expanded(
-            child: _StatCell(
-              label: 'Après',
-              value: _formatSize(state.resultSizeBytes),
-            ),
+            child: _StatCell(label: 'Après', value: afterValue),
           ),
           Container(width: 1, height: 40, color: theme.dividerColor),
           Expanded(
             child: _StatCell(
               label: 'Réduction',
-              value: gained
-                  ? '-${reduction.toStringAsFixed(1)}%'
-                  : '${reduction.toStringAsFixed(1)}%',
-              valueColor: gained
-                  ? Colors.green.shade600
-                  : theme.colorScheme.onSurface,
+              value: reductionValue,
+              valueColor: reductionColor,
             ),
           ),
         ],
@@ -436,16 +468,9 @@ class _ErrorView extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.error_outline,
-              size: 48,
-              color: theme.colorScheme.error,
-            ),
+            Icon(Icons.error_outline, size: 48, color: theme.colorScheme.error),
             const SizedBox(height: AppSpacing.md),
-            Text(
-              'Erreur',
-              style: theme.textTheme.titleMedium,
-            ),
+            Text('Erreur', style: theme.textTheme.titleMedium),
             const SizedBox(height: AppSpacing.xxs),
             Text(
               message,
@@ -457,10 +482,7 @@ class _ErrorView extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: AppSpacing.xl),
-            ElevatedButton(
-              onPressed: onRetry,
-              child: const Text('Réessayer'),
-            ),
+            ElevatedButton(onPressed: onRetry, child: const Text('Réessayer')),
           ],
         ),
       ),

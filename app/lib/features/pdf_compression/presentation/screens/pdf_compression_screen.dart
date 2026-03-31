@@ -1,7 +1,10 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/theme/app_spacing.dart';
 import '../../domain/pdf_compression_state.dart';
@@ -19,17 +22,19 @@ class PdfCompressionScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Compression PDF'),
         actions: [
-          if (state.status == PdfCompressionStatus.done)
+          if (state.status == PdfCompressionStatus.done ||
+              state.status == PdfCompressionStatus.picked)
             IconButton(
               onPressed: () => notifier.reset(),
               icon: const Icon(Icons.refresh),
-              tooltip: 'Recommencer',
+              tooltip: 'Nouveau fichier',
             ),
         ],
       ),
       body: switch (state.status) {
-        PdfCompressionStatus.idle => _IdleView(onPick: notifier.pickAndCompress),
-        PdfCompressionStatus.picking => _IdleView(onPick: notifier.pickAndCompress),
+        PdfCompressionStatus.idle => _IdleView(onPick: notifier.pickFile),
+        PdfCompressionStatus.picking => _IdleView(onPick: notifier.pickFile),
+        PdfCompressionStatus.picked => _PickedView(state: state, notifier: notifier),
         PdfCompressionStatus.compressing => const _CompressingView(),
         PdfCompressionStatus.done => _ResultView(state: state, notifier: notifier),
         PdfCompressionStatus.error => _ErrorView(
@@ -83,12 +88,90 @@ class _IdleView extends StatelessWidget {
               child: ElevatedButton.icon(
                 onPressed: onPick,
                 icon: const Icon(Icons.upload_file_outlined),
-                label: const Text('Sélectionner un PDF'),
+                label: const Text('Choisir un PDF'),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─── Picked (Configuration) ──────────────────────────────────────────────────
+
+class _PickedView extends StatelessWidget {
+  const _PickedView({required this.state, required this.notifier});
+  final PdfCompressionState state;
+  final PdfCompressionNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return ListView(
+      padding: AppSpacing.screenPadding,
+      children: [
+        const SizedBox(height: AppSpacing.xs),
+
+        _FileInfoCard(state: state),
+
+        const SizedBox(height: AppSpacing.lg),
+
+        // Aperçu AVANT compression
+        Text(
+          'APERÇU',
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        _PreviewContainer(previewBytes: state.previewBytes),
+
+        const SizedBox(height: AppSpacing.xl),
+
+        Text(
+          'NIVEAU DE COMPRESSION',
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        _CompressionLevelSelector(
+          selected: state.compressionLevel,
+          onChanged: notifier.setCompressionLevel,
+        ),
+
+        const SizedBox(height: AppSpacing.xxl),
+
+        SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: ElevatedButton.icon(
+            onPressed: notifier.compress,
+            icon: const Icon(Icons.compress_rounded, size: 18),
+            label: const Text('Compresser'),
+            style: ElevatedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: AppSpacing.borderRadiusFull,
+              ),
+            ),
+          ),
+        ),
+
+        const SizedBox(height: AppSpacing.md),
+
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: TextButton(
+            onPressed: notifier.reset,
+            child: const Text('Changer de fichier'),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -121,7 +204,7 @@ class _CompressingView extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.xxs),
           Text(
-            'Optimisation du document',
+            'Optimisation des images…',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -141,8 +224,6 @@ class _ResultView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return ListView(
       padding: AppSpacing.screenPadding,
       children: [
@@ -151,33 +232,6 @@ class _ResultView extends StatelessWidget {
         _FileInfoCard(state: state),
 
         const SizedBox(height: AppSpacing.lg),
-
-        Text(
-          'APERÇU',
-          style: theme.textTheme.labelMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-            letterSpacing: 1,
-          ),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        _PdfPreview(previewImageBytes: state.previewBytes!),
-
-        const SizedBox(height: AppSpacing.xl),
-
-        Text(
-          'NIVEAU DE COMPRESSION',
-          style: theme.textTheme.labelMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-            letterSpacing: 1,
-          ),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        _CompressionLevelSelector(
-          selected: state.compressionLevel,
-          onChanged: notifier.setCompressionLevel,
-        ),
-
-        const SizedBox(height: AppSpacing.xl),
 
         if (state.alreadyOptimized) ...[
           const _AlreadyOptimizedBanner(),
@@ -188,11 +242,12 @@ class _ResultView extends StatelessWidget {
 
         const SizedBox(height: AppSpacing.xxl),
 
+        // Enregistrer
         SizedBox(
           width: double.infinity,
           height: 52,
           child: ElevatedButton.icon(
-            onPressed: () => _save(context),
+            onPressed: state.alreadyOptimized ? null : () => _save(context),
             icon: const Icon(Icons.download_rounded, size: 18),
             label: const Text('Enregistrer le PDF'),
             style: ElevatedButton.styleFrom(
@@ -200,6 +255,54 @@ class _ResultView extends StatelessWidget {
                 borderRadius: AppSpacing.borderRadiusFull,
               ),
             ),
+          ),
+        ),
+
+        const SizedBox(height: AppSpacing.sm),
+
+        // Partager
+        SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: ElevatedButton.icon(
+            onPressed: state.alreadyOptimized ? null : () => _share(context),
+            icon: const Icon(Icons.share_rounded, size: 18),
+            label: const Text('Partager'),
+            style: ElevatedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: AppSpacing.borderRadiusFull,
+              ),
+            ),
+          ),
+        ),
+
+        const SizedBox(height: AppSpacing.sm),
+
+        // Changer le niveau → retour config
+        SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: OutlinedButton.icon(
+            onPressed: notifier.backToConfig,
+            icon: const Icon(Icons.tune_rounded, size: 18),
+            label: const Text('Changer le niveau'),
+            style: OutlinedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: AppSpacing.borderRadiusFull,
+              ),
+            ),
+          ),
+        ),
+
+        const SizedBox(height: AppSpacing.xs),
+
+        // Nouveau fichier
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: TextButton(
+            onPressed: notifier.reset,
+            child: const Text('Nouveau fichier'),
           ),
         ),
 
@@ -215,6 +318,60 @@ class _ResultView extends StatelessWidget {
       SnackBar(
         content: Text(success ? 'PDF enregistré' : 'Échec de l\'enregistrement'),
         behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _share(BuildContext context) async {
+    final bytes = state.resultBytes;
+    final name = state.originalFileName;
+    if (bytes == null || name == null) return;
+
+    try {
+      final tmp = await getTemporaryDirectory();
+      final file = File('${tmp.path}/$name');
+      await file.writeAsBytes(bytes);
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Impossible de partager le fichier'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+}
+
+// ─── Preview Container ────────────────────────────────────────────────────────
+
+class _PreviewContainer extends StatelessWidget {
+  const _PreviewContainer({required this.previewBytes});
+  final Uint8List? previewBytes;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return ClipRRect(
+      borderRadius: AppSpacing.borderRadiusLarge,
+      child: Container(
+        height: 240,
+        color: theme.colorScheme.surfaceContainerLow,
+        child: previewBytes != null
+            ? Image.memory(
+                previewBytes!,
+                fit: BoxFit.contain,
+                width: double.infinity,
+              )
+            : Center(
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+                ),
+              ),
       ),
     );
   }
@@ -266,31 +423,6 @@ class _FileInfoCard extends StatelessWidget {
   }
 }
 
-// ─── PDF Preview ─────────────────────────────────────────────────────────────
-
-class _PdfPreview extends StatelessWidget {
-  const _PdfPreview({required this.previewImageBytes});
-  final Uint8List previewImageBytes;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return ClipRRect(
-      borderRadius: AppSpacing.borderRadiusLarge,
-      child: Container(
-        height: 240,
-        color: theme.colorScheme.surfaceContainerLow,
-        child: Image.memory(
-          previewImageBytes,
-          fit: BoxFit.contain,
-          width: double.infinity,
-        ),
-      ),
-    );
-  }
-}
-
 // ─── Already Optimized Banner ─────────────────────────────────────────────────
 
 class _AlreadyOptimizedBanner extends StatelessWidget {
@@ -317,7 +449,7 @@ class _AlreadyOptimizedBanner extends StatelessWidget {
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
-              'Ce PDF est déjà optimisé, aucune compression pertinente n\'a pu être appliquée.',
+              'Ce PDF est déjà optimisé — aucune réduction possible.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSecondaryContainer,
               ),

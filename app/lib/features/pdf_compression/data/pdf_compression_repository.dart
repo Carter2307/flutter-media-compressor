@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
@@ -43,10 +43,39 @@ class PdfCompressionRepository {
     return (bytes, file.name, pageCount);
   }
 
+  /// Génère un aperçu JPEG de la première page via le backend.
+  /// Retourne null en cas d'erreur (silencieux côté UX, loggué).
+  Future<Uint8List?> getPreview(Uint8List bytes, String fileName) async {
+    try {
+      final formData = FormData.fromMap({
+        'file': MultipartFile.fromBytes(
+          bytes,
+          filename: fileName,
+          contentType: DioMediaType('application', 'pdf'),
+        ),
+      });
+
+      final response = await _apiClient.dio.post(
+        '${ApiEndpoints.baseUrl}${ApiEndpoints.pdfPreview}',
+        data: formData,
+        options: Options(
+          responseType: ResponseType.json,
+          receiveTimeout: const Duration(seconds: 15),
+          sendTimeout: const Duration(seconds: 15),
+        ),
+      );
+
+      final json = response.data as Map<String, dynamic>;
+      return base64.decode(json['preview_base64'] as String);
+    } catch (e) {
+      debugPrint('PDF preview error: $e');
+      return null;
+    }
+  }
+
   /// Envoie le PDF au backend et retourne le résultat décodé.
   Future<({
     Uint8List pdfBytes,
-    Uint8List previewBytes,
     bool alreadyOptimized,
     int compressedSize,
   })> compress(
@@ -75,15 +104,13 @@ class PdfCompressionRepository {
     );
 
     final json = response.data as Map<String, dynamic>;
-    final status = json['status'] as String;
+    final optimized = json['optimized'] as bool;
     final compressedSize = json['compressed_size'] as int;
     final pdfBytes = base64.decode(json['pdf_base64'] as String);
-    final previewBytes = base64.decode(json['preview_base64'] as String);
 
     return (
       pdfBytes: pdfBytes,
-      previewBytes: previewBytes,
-      alreadyOptimized: status == 'already_optimized',
+      alreadyOptimized: !optimized,
       compressedSize: compressedSize,
     );
   }

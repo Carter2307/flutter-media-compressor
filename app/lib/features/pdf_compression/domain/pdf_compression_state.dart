@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-enum PdfCompressionStatus { idle, picking, compressing, done, error }
+enum PdfCompressionStatus { idle, picking, picked, compressing, done, error }
 
 enum PdfCompressionLevel {
   light,
@@ -60,29 +60,31 @@ class PdfCompressionState {
     return (1 - resultSizeBytes / originalSizeBytes) * 100;
   }
 
+  static const _absent = Object();
+
   PdfCompressionState copyWith({
     PdfCompressionStatus? status,
     String? originalFileName,
     int? originalSizeBytes,
     int? originalPageCount,
-    Uint8List? resultBytes,
+    Object? resultBytes = _absent,
     int? resultSizeBytes,
     PdfCompressionLevel? compressionLevel,
     String? errorMessage,
     bool? alreadyOptimized,
-    Uint8List? previewBytes,
+    Object? previewBytes = _absent,
   }) {
     return PdfCompressionState(
       status: status ?? this.status,
       originalFileName: originalFileName ?? this.originalFileName,
       originalSizeBytes: originalSizeBytes ?? this.originalSizeBytes,
       originalPageCount: originalPageCount ?? this.originalPageCount,
-      resultBytes: resultBytes ?? this.resultBytes,
+      resultBytes: resultBytes == _absent ? this.resultBytes : resultBytes as Uint8List?,
       resultSizeBytes: resultSizeBytes ?? this.resultSizeBytes,
       compressionLevel: compressionLevel ?? this.compressionLevel,
       errorMessage: errorMessage ?? this.errorMessage,
       alreadyOptimized: alreadyOptimized ?? this.alreadyOptimized,
-      previewBytes: previewBytes ?? this.previewBytes,
+      previewBytes: previewBytes == _absent ? this.previewBytes : previewBytes as Uint8List?,
     );
   }
 

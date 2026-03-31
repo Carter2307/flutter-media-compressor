@@ -471,10 +471,32 @@ async def compress_video(
 # --- Compress PDF ---
 
 PDF_COMPRESSION_LEVELS = {
-    "light":      {"quality": 85, "scale": 1.0},
-    "standard":   {"quality": 65, "scale": 0.8},
-    "aggressive": {"quality": 40, "scale": 0.6},
+    "light":      {"quality": 85, "scale": 0.90},
+    "standard":   {"quality": 70, "scale": 0.75},
+    "aggressive": {"quality": 50, "scale": 0.50},
 }
+
+
+@app.post("/api/pdf-preview")
+async def pdf_preview(file: UploadFile = File(...)):
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    contents = await file.read()
+    if len(contents) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large")
+    try:
+        import fitz
+    except ImportError:
+        raise HTTPException(status_code=501, detail="pymupdf non installé")
+    try:
+        doc = fitz.open(stream=contents, filetype="pdf")
+        pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
+        preview_jpg = pix.tobytes("jpg", quality=70)
+        doc.close()
+        return {"preview_base64": base64.b64encode(preview_jpg).decode()}
+    except Exception as e:
+        logger.error(f"Erreur preview PDF: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erreur preview : {str(e)}")
 
 
 @app.post("/api/compress-pdf")
@@ -482,7 +504,7 @@ async def compress_pdf(
     file: UploadFile = File(...),
     level: str = Query(default="standard", description="Compression level: light, standard, aggressive"),
 ):
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
+    if file.content_type != "application/pdf" and not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Le fichier doit être un PDF")
 
     if level not in PDF_COMPRESSION_LEVELS:
@@ -498,11 +520,6 @@ async def compress_pdf(
         import pikepdf
     except ImportError:
         raise HTTPException(status_code=501, detail="pikepdf non installé")
-
-    try:
-        import fitz
-    except ImportError:
-        raise HTTPException(status_code=501, detail="pymupdf non installé")
 
     params = PDF_COMPRESSION_LEVELS[level]
 
@@ -525,26 +542,18 @@ async def compress_pdf(
 
         compressed_size = compressed_buf.tell()
 
-        if compressed_size >= original_size:
+        optimized = compressed_size < original_size
+        if not optimized:
             result_bytes = contents
-            status = "already_optimized"
         else:
             compressed_buf.seek(0)
             result_bytes = compressed_buf.read()
-            status = "compressed"
-
-        # Aperçu : rendu de la première page en PNG via pymupdf
-        doc = fitz.open(stream=result_bytes, filetype="pdf")
-        pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
-        preview_png = pix.tobytes("png")
-        doc.close()
 
         return {
-            "status": status,
+            "optimized": optimized,
             "original_size": original_size,
-            "compressed_size": compressed_size,
+            "compressed_size": compressed_size if optimized else original_size,
             "pdf_base64": base64.b64encode(result_bytes).decode(),
-            "preview_base64": base64.b64encode(preview_png).decode(),
         }
 
     except pikepdf.PasswordError:
@@ -552,6 +561,8 @@ async def compress_pdf(
     except Exception as e:
         logger.error(f"Erreur compression PDF: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Erreur lors de la compression : {str(e)}")
+
+
 
 
 def _recompress_pdf_images(pdf, quality: int, scale: float = 1.0) -> None:
@@ -585,6 +596,8 @@ def _recompress_pdf_images(pdf, quality: int, scale: float = 1.0) -> None:
                     )
                     image_obj["/ColorSpace"] = compressed.obj["/ColorSpace"]
                     image_obj["/BitsPerComponent"] = compressed.obj["/BitsPerComponent"]
+                    image_obj["/Width"] = compressed.obj["/Width"]
+                    image_obj["/Height"] = compressed.obj["/Height"]
                 except Exception:
                     continue
     except Exception:

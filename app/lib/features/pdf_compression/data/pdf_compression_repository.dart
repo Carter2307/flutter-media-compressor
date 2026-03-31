@@ -1,18 +1,25 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 
+import '../../../core/network/api_client.dart';
+import '../../../core/network/api_endpoints.dart';
 import '../domain/pdf_compression_state.dart';
 
 final pdfCompressionRepositoryProvider = Provider<PdfCompressionRepository>(
-  (_) => PdfCompressionRepository(),
+  (ref) => PdfCompressionRepository(ref.read(apiClientProvider)),
 );
 
 class PdfCompressionRepository {
+  PdfCompressionRepository(this._apiClient);
+
+  final ApiClient _apiClient;
+
   /// Ouvre le sélecteur de fichiers et retourne (bytes, nom, pages).
   /// Retourne null si l'utilisateur annule.
   Future<(Uint8List bytes, String name, int pageCount)?> pickPdf() async {
@@ -35,22 +42,31 @@ class PdfCompressionRepository {
     return (bytes, file.name, pageCount);
   }
 
-  /// Compresse le PDF en mémoire et retourne les bytes résultants.
+  /// Envoie le PDF au backend et retourne les bytes compressés.
   Future<Uint8List> compress(
     Uint8List inputBytes,
+    String fileName,
     PdfCompressionLevel level,
   ) async {
-    final doc = sf.PdfDocument(inputBytes: inputBytes);
+    final formData = FormData.fromMap({
+      'file': MultipartFile.fromBytes(
+        inputBytes,
+        filename: fileName,
+        contentType: DioMediaType('application', 'pdf'),
+      ),
+    });
 
-    doc.compressionLevel = _toSyncfusionLevel(level);
+    final response = await _apiClient.dio.post(
+      '${ApiEndpoints.baseUrl}${ApiEndpoints.compressPdf}',
+      data: formData,
+      queryParameters: {'level': level.apiValue},
+      options: Options(
+        responseType: ResponseType.bytes,
+        contentType: 'multipart/form-data',
+      ),
+    );
 
-    if (level == PdfCompressionLevel.aggressive) {
-      _removeMetadata(doc);
-    }
-
-    final outputBytes = Uint8List.fromList(await doc.save());
-    doc.dispose();
-    return outputBytes;
+    return Uint8List.fromList(response.data as List<int>);
   }
 
   /// Enregistre le PDF dans le répertoire Documents et retourne le chemin.
@@ -68,27 +84,5 @@ class PdfCompressionRepository {
 
     await File(filePath).writeAsBytes(bytes);
     return filePath;
-  }
-
-  // ── Helpers ──────────────────────────────────────────────────────────────
-
-  sf.PdfCompressionLevel _toSyncfusionLevel(PdfCompressionLevel level) {
-    switch (level) {
-      case PdfCompressionLevel.light:
-        return sf.PdfCompressionLevel.normal;
-      case PdfCompressionLevel.standard:
-        return sf.PdfCompressionLevel.best;
-      case PdfCompressionLevel.aggressive:
-        return sf.PdfCompressionLevel.best;
-    }
-  }
-
-  void _removeMetadata(sf.PdfDocument doc) {
-    doc.documentInformation.author = '';
-    doc.documentInformation.creator = '';
-    doc.documentInformation.keywords = '';
-    doc.documentInformation.producer = '';
-    doc.documentInformation.subject = '';
-    doc.documentInformation.title = '';
   }
 }

@@ -117,7 +117,7 @@ async def read_and_validate_image(file: UploadFile) -> Image.Image:
 
     try:
         from PIL import ImageOps
-        image = ImageOps.exif_transpose(Image.open(io.BytesIO(contents)))    
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(contents)))
         if image.width > MAX_RESOLUTION or image.height > MAX_RESOLUTION:
             raise HTTPException(
                 status_code=400,
@@ -423,7 +423,7 @@ async def compress_video(
 
     try:
         clip = VideoFileClip(temp_input_path)
-        
+
         settings = {
             "low": {"w": 360, "bitrate": "500k"},
             "medium": {"w": 480, "bitrate": "1000k"},
@@ -431,17 +431,17 @@ async def compress_video(
         }
         target = settings.get(quality, settings["medium"])
 
-        
+
         if clip.w > target["w"]:
-            clip = clip.resized(width=target["w"])  
+            clip = clip.resized(width=target["w"])
 
         clip.write_videofile(
             temp_output_path,
             codec="libx264",
             audio_codec="aac",
             bitrate=target["bitrate"],
-            preset="ultrafast", 
-            logger=None  
+            preset="ultrafast",
+            logger=None
         )
         clip.close()
 
@@ -460,7 +460,106 @@ async def compress_video(
     except Exception as e:
         if os.path.exists(temp_input_path): os.remove(temp_input_path)
         logger.error(f"Erreur vidéo : {e}")
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Compress PDF ---
+
+@app.post("/api/compress-pdf")
+async def compress_pdf(
+    file: UploadFile = File(...),
+    level: str = Query(default="standard", description="Compression level: light, standard, aggressive"),
+):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Le fichier doit être un PDF")
+
+    contents = await file.read()
+
+    max_pdf_size = 100 * 1024 * 1024  # 100 Mo
+    if len(contents) > max_pdf_size:
+        raise HTTPException(status_code=400, detail="Fichier trop volumineux (max 100 Mo)")
+
+    try:
+        import pikepdf
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="La compression PDF n'est pas disponible. Installez pikepdf pour activer cette fonctionnalité."
+        )
+
+    try:
+        pdf = pikepdf.open(io.BytesIO(contents))
+
+        if level in ("standard", "aggressive"):
+            # Suppression des métadonnées
+            with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
+                meta.clear()
+            try:
+                pdf.docinfo.clear()
+            except Exception:
+                pass
+
+        if level == "aggressive":
+            _recompress_pdf_images(pdf, quality=45)
+
+        output = io.BytesIO()
+        pdf.save(
+            output,
+            compress_streams=True,
+            linearize=(level != "light"),
+        )
+        pdf.close()
+
+        output_size = output.tell()
+        output.seek(0)
+
+        return StreamingResponse(
+            output,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=compressed.pdf",
+                "X-Original-Size": str(len(contents)),
+                "X-Compressed-Size": str(output_size),
+            },
+        )
+    except pikepdf.PasswordError:
+        raise HTTPException(status_code=400, detail="Le PDF est protégé par un mot de passe")
+    except Exception as e:
+        logger.error(f"Erreur compression PDF: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la compression : {str(e)}")
+
+
+def _recompress_pdf_images(pdf, quality: int) -> None:
+    """Recompresse les images embarquées dans le PDF avec PIL."""
+    try:
+        import pikepdf
+        from PIL import Image as PilImage
+
+        for page in pdf.pages:
+            for _, image_obj in page.images.items():
+                try:
+                    pdf_image = pikepdf.PdfImage(image_obj)
+                    pil_img = pdf_image.as_pil_image()
+
+                    if pil_img.mode not in ("RGB", "L"):
+                        pil_img = pil_img.convert("RGB")
+
+                    buf = io.BytesIO()
+                    pil_img.save(buf, format="JPEG", quality=quality, optimize=True)
+                    buf.seek(0)
+
+                    compressed = pikepdf.PdfImage.from_pil_image(PilImage.open(buf))
+                    image_obj.write(
+                        compressed.obj.read_raw_bytes(),
+                        filter=pikepdf.Name("/DCTDecode"),
+                    )
+                    image_obj["/ColorSpace"] = compressed.obj["/ColorSpace"]
+                    image_obj["/BitsPerComponent"] = compressed.obj["/BitsPerComponent"]
+                except Exception:
+                    # Ignorer les images non supportées (masques, CMYK, etc.)
+                    continue
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -17,6 +17,17 @@ enum PdfCompressionLevel {
         return 'Agressif';
     }
   }
+
+  String get apiValue {
+    switch (this) {
+      case PdfCompressionLevel.light:
+        return 'light';
+      case PdfCompressionLevel.standard:
+        return 'standard';
+      case PdfCompressionLevel.aggressive:
+        return 'aggressive';
+    }
+  }
 }
 
 class PdfCompressionState {

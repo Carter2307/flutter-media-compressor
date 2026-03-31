@@ -91,6 +91,7 @@ class PdfCompressionNotifier extends StateNotifier<PdfCompressionState> {
     try {
       final result = await _repository.compress(
         _originalBytes!,
+        state.originalFileName ?? 'document.pdf',
         state.compressionLevel,
       );
 

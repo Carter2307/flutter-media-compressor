@@ -28,3 +28,4 @@ pillow-heif>=0.16.0
 
 # PDF compression
 pikepdf>=8.0.0
+pymupdf>=1.23.0

@@ -1,5 +1,6 @@
 import os
 import io
+import base64
 import logging
 import tempfile
 import shutil
@@ -34,16 +35,21 @@ MAX_RESOLUTION = 8192
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Preload default models on startup."""
-    logger.info(f"Loading default processor: {DEFAULT_PROCESSOR}")
-    get_processor(DEFAULT_PROCESSOR, preload=True)
-    logger.info("Processor loaded!")
+    """Preload default models on startup (best-effort — server starts even if models are unavailable)."""
+    try:
+        logger.info(f"Loading default processor: {DEFAULT_PROCESSOR}")
+        get_processor(DEFAULT_PROCESSOR, preload=True)
+        logger.info("Processor loaded!")
+    except Exception:
+        pass
 
-    logger.info(f"Loading default upscaler: {DEFAULT_UPSCALER}")
-    get_upscaler(DEFAULT_UPSCALER, preload=True)
-    logger.info("Upscaler loaded!")
+    try:
+        logger.info(f"Loading default upscaler: {DEFAULT_UPSCALER}")
+        get_upscaler(DEFAULT_UPSCALER, preload=True)
+        logger.info("Upscaler loaded!")
+    except Exception:
+        pass
 
-    logger.info("All models ready!")
     yield
 
 
@@ -464,6 +470,13 @@ async def compress_video(
 
 # --- Compress PDF ---
 
+PDF_COMPRESSION_LEVELS = {
+    "light":      {"quality": 85, "scale": 1.0},
+    "standard":   {"quality": 65, "scale": 0.8},
+    "aggressive": {"quality": 40, "scale": 0.6},
+}
+
+
 @app.post("/api/compress-pdf")
 async def compress_pdf(
     file: UploadFile = File(...),
@@ -472,25 +485,31 @@ async def compress_pdf(
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Le fichier doit être un PDF")
 
-    contents = await file.read()
+    if level not in PDF_COMPRESSION_LEVELS:
+        raise HTTPException(status_code=400, detail="level doit être light, standard ou aggressive")
 
-    max_pdf_size = 100 * 1024 * 1024  # 100 Mo
-    if len(contents) > max_pdf_size:
+    contents = await file.read()
+    original_size = len(contents)
+
+    if original_size > 100 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Fichier trop volumineux (max 100 Mo)")
 
     try:
         import pikepdf
     except ImportError:
-        raise HTTPException(
-            status_code=501,
-            detail="La compression PDF n'est pas disponible. Installez pikepdf pour activer cette fonctionnalité."
-        )
+        raise HTTPException(status_code=501, detail="pikepdf non installé")
+
+    try:
+        import fitz
+    except ImportError:
+        raise HTTPException(status_code=501, detail="pymupdf non installé")
+
+    params = PDF_COMPRESSION_LEVELS[level]
 
     try:
         pdf = pikepdf.open(io.BytesIO(contents))
 
         if level in ("standard", "aggressive"):
-            # Suppression des métadonnées
             with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
                 meta.clear()
             try:
@@ -498,29 +517,36 @@ async def compress_pdf(
             except Exception:
                 pass
 
-        if level == "aggressive":
-            _recompress_pdf_images(pdf, quality=45)
+        _recompress_pdf_images(pdf, quality=params["quality"], scale=params["scale"])
 
-        output = io.BytesIO()
-        pdf.save(
-            output,
-            compress_streams=True,
-            linearize=(level != "light"),
-        )
+        compressed_buf = io.BytesIO()
+        pdf.save(compressed_buf, compress_streams=True, linearize=(level != "light"))
         pdf.close()
 
-        output_size = output.tell()
-        output.seek(0)
+        compressed_size = compressed_buf.tell()
 
-        return StreamingResponse(
-            output,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f"attachment; filename=compressed.pdf",
-                "X-Original-Size": str(len(contents)),
-                "X-Compressed-Size": str(output_size),
-            },
-        )
+        if compressed_size >= original_size:
+            result_bytes = contents
+            status = "already_optimized"
+        else:
+            compressed_buf.seek(0)
+            result_bytes = compressed_buf.read()
+            status = "compressed"
+
+        # Aperçu : rendu de la première page en PNG via pymupdf
+        doc = fitz.open(stream=result_bytes, filetype="pdf")
+        pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+        preview_png = pix.tobytes("png")
+        doc.close()
+
+        return {
+            "status": status,
+            "original_size": original_size,
+            "compressed_size": compressed_size,
+            "pdf_base64": base64.b64encode(result_bytes).decode(),
+            "preview_base64": base64.b64encode(preview_png).decode(),
+        }
+
     except pikepdf.PasswordError:
         raise HTTPException(status_code=400, detail="Le PDF est protégé par un mot de passe")
     except Exception as e:
@@ -528,8 +554,8 @@ async def compress_pdf(
         raise HTTPException(status_code=500, detail=f"Erreur lors de la compression : {str(e)}")
 
 
-def _recompress_pdf_images(pdf, quality: int) -> None:
-    """Recompresse les images embarquées dans le PDF avec PIL."""
+def _recompress_pdf_images(pdf, quality: int, scale: float = 1.0) -> None:
+    """Recompresse les images embarquées (qualité JPEG + downscale optionnel)."""
     try:
         import pikepdf
         from PIL import Image as PilImage
@@ -543,6 +569,11 @@ def _recompress_pdf_images(pdf, quality: int) -> None:
                     if pil_img.mode not in ("RGB", "L"):
                         pil_img = pil_img.convert("RGB")
 
+                    if scale != 1.0:
+                        new_w = max(1, round(pil_img.width * scale))
+                        new_h = max(1, round(pil_img.height * scale))
+                        pil_img = pil_img.resize((new_w, new_h), PilImage.Resampling.LANCZOS)
+
                     buf = io.BytesIO()
                     pil_img.save(buf, format="JPEG", quality=quality, optimize=True)
                     buf.seek(0)
@@ -555,7 +586,6 @@ def _recompress_pdf_images(pdf, quality: int) -> None:
                     image_obj["/ColorSpace"] = compressed.obj["/ColorSpace"]
                     image_obj["/BitsPerComponent"] = compressed.obj["/BitsPerComponent"]
                 except Exception:
-                    # Ignorer les images non supportées (masques, CMYK, etc.)
                     continue
     except Exception:
         pass

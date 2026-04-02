@@ -46,7 +46,11 @@ class HistoryService {
     await _ensureInitialized();
 
     final id = '${type.name}_${DateTime.now().millisecondsSinceEpoch}';
-    final ext = type == HistoryType.pdf ? 'pdf' : 'png';
+    final ext = switch (type) {
+      HistoryType.pdf => 'pdf',
+      HistoryType.video => 'mp4',
+      _ => 'png',
+    };
     final resultFile = File('${_historyDir!.path}/$id.$ext');
     await resultFile.writeAsBytes(resultBytes);
 

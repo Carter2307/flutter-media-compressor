@@ -20,6 +20,9 @@ abstract final class ApiEndpoints {
   // PDF preview
   static const String pdfPreview = '/api/pdf-preview';
 
+  // Video compression
+  static const String compressVideo = '/api/compress-video';
+
   // Health
   static const String health = '/health';
 }

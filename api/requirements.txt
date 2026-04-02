@@ -1,30 +1,29 @@
+# Core API
 fastapi>=0.108.0
 uvicorn>=0.27.0
 python-multipart>=0.0.6
-pillow>=12.1.0
 
-# Rembg
-rembg>=2.0.72
+# Image processing
+pillow
 
-# BiRefNet
-einops>=0.8.0
+# Background removal - Rembg
+rembg
+rembg[cpu]
+
+# Background removal - BiRefNet
+numpy>=1.24.0
 torch>=2.0.0
 torchvision>=0.15.0
 transformers>=4.36.0
 
-# 851-labs (transparent-background / InSPyReNet)
+# Background removal - 851-labs (transparent-background / InSPyReNet)
 transparent-background>=1.3.0
 
 # Image upscaling
 super-image>=0.1.7
-numpy>=1.24.0
 
-# Object removal (inpainting)
-# iopaint is installed separately with --no-deps due to its strict Pillow==9.5.0 pin
-# Run: pip3 install --no-deps iopaint>=1.3.0
-
-# Image compression
-pillow-heif>=0.16.0
+# Video compression
+moviepy
 
 # PDF compression
 pikepdf>=8.0.0

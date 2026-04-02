@@ -16,6 +16,19 @@ enum HistoryType {
         return 'Compression PDF';
     }
   }
+
+  String get shortLabel {
+    switch (this) {
+      case HistoryType.background:
+        return 'Fond';
+      case HistoryType.image:
+        return 'Image';
+      case HistoryType.video:
+        return 'Vidéo';
+      case HistoryType.pdf:
+        return 'PDF';
+    }
+  }
 }
 
 class HistoryEntry {

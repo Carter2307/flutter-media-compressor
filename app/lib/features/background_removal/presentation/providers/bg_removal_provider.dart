@@ -21,16 +21,13 @@ class BgRemovalNotifier extends StateNotifier<BgRemovalState> {
   final Ref _ref;
   Uint8List? _transparentResult;
 
-  Future<void> pickAndProcess() async {
-    state = state.copyWith(status: BgRemovalStatus.picking);
+  /// Pick image only, returns the picked data or null if cancelled.
+  Future<(Uint8List bytes, String name)?> pickImage() async {
+    return _repository.pickImage();
+  }
 
-    final picked = await _repository.pickImage();
-    if (picked == null) {
-      state = state.copyWith(status: BgRemovalStatus.idle);
-      return;
-    }
-
-    final (bytes, name) = picked;
+  /// Process an already-picked image.
+  Future<void> processImage(Uint8List bytes, String name) async {
     state = state.copyWith(
       status: BgRemovalStatus.processing,
       originalImageBytes: bytes,

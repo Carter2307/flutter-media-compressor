@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
@@ -10,11 +9,24 @@ import 'package:share_plus/share_plus.dart';
 import '../../../../core/history/history_entry.dart';
 import '../../../../core/history/history_provider.dart';
 import '../../../../core/theme/app_spacing.dart';
+import '../../../../shared/widgets/button.dart';
 
 String _formatSize(int bytes) {
   if (bytes < 1024) return '$bytes o';
   if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} Ko';
   return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} Mo';
+}
+
+String _relativeDate(DateTime date) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(date.year, date.month, date.day);
+  final diff = today.difference(day).inDays;
+
+  if (diff == 0) return DateFormat('HH:mm').format(date);
+  if (diff == 1) return 'hier';
+  if (diff == 2) return 'avant-hier';
+  return DateFormat('dd/MM/yyyy').format(date);
 }
 
 class HomeScreen extends ConsumerWidget {
@@ -25,7 +37,6 @@ class HomeScreen extends ConsumerWidget {
     final historyAsync = ref.watch(historyProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Image Utility')),
       body: historyAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, _) => const Center(child: Text('Erreur de chargement')),
@@ -37,255 +48,194 @@ class HomeScreen extends ConsumerWidget {
 
 // ─── Content ───
 
-class _HomeContent extends StatelessWidget {
+class _HomeContent extends StatefulWidget {
   const _HomeContent({required this.entries});
   final List<HistoryEntry> entries;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final grouped = <HistoryType, List<HistoryEntry>>{};
-    for (final entry in entries) {
-      grouped.putIfAbsent(entry.type, () => []).add(entry);
-    }
-
-    return ListView(
-      padding: AppSpacing.screenPadding,
-      children: [
-        const SizedBox(height: AppSpacing.sm),
-
-        // Tools grid
-        _ToolsGrid(),
-
-        const SizedBox(height: AppSpacing.xxl),
-
-        // History
-        if (entries.isEmpty)
-          _EmptyState(theme: theme)
-        else
-          ...grouped.entries.map((e) => _HistorySection(
-                type: e.key,
-                entries: e.value,
-              )),
-      ],
-    );
-  }
+  State<_HomeContent> createState() => _HomeContentState();
 }
 
-// ─── Tools Grid ───
+class _HomeContentState extends State<_HomeContent> {
+  String _query = '';
 
-class _ToolsGrid extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: AppSpacing.sm,
-      crossAxisSpacing: AppSpacing.sm,
-      childAspectRatio: 2.2,
-      children: [
-        _ToolTile(
-          icon: Icons.image_outlined,
-          label: 'Image',
-          color: const Color(0xFF1565C0),
-          onTap: (ctx) => ctx.go('/image'),
-        ),
-        _ToolTile(
-          icon: Icons.videocam_outlined,
-          label: 'Vidéo',
-          color: const Color(0xFF7B1FA2),
-          onTap: (ctx) => ctx.go('/video'),
-        ),
-        _ToolTile(
-          icon: Icons.auto_fix_high_outlined,
-          label: 'Fond',
-          color: const Color(0xFF00897B),
-          onTap: (ctx) => ctx.go('/background'),
-        ),
-        _ToolTile(
-          icon: Icons.picture_as_pdf_outlined,
-          label: 'PDF',
-          color: const Color(0xFFD84315),
-          onTap: (ctx) => ctx.go('/pdf'),
-        ),
-      ],
-    );
+  List<HistoryEntry> get _filtered {
+    if (_query.isEmpty) return widget.entries;
+    final q = _query.toLowerCase();
+    return widget.entries
+        .where((e) => e.originalName.toLowerCase().contains(q))
+        .toList();
   }
-}
-
-class _ToolTile extends StatelessWidget {
-  const _ToolTile({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-  final void Function(BuildContext) onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final filtered = _filtered;
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => onTap(context),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.md,
-            vertical: AppSpacing.sm,
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: AppSpacing.borderRadiusSmall,
-                ),
-                child: Icon(icon, color: color, size: 20),
+    return SafeArea(
+      child: CustomScrollView(
+        slivers: [
+          // Title + search
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.lg,
+                AppSpacing.md,
+                0,
               ),
-              const SizedBox(width: AppSpacing.sm),
-              Text(label, style: theme.textTheme.titleSmall),
-            ],
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Récents',
+                    style: theme.textTheme.headlineLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  TextField(
+                    onChanged: (v) => setState(() => _query = v),
+                    decoration: InputDecoration(
+                      hintText: 'Rechercher',
+                      prefixIcon: const Icon(Icons.search, size: 22),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: AppSpacing.sm,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                ],
+              ),
+            ),
           ),
-        ),
+
+          // Grid or empty state
+          if (filtered.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _EmptyState(theme: theme),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  mainAxisSpacing: AppSpacing.lg,
+                  crossAxisSpacing: AppSpacing.sm,
+                  childAspectRatio: 0.52,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _GridItem(entry: filtered[index]),
+                  childCount: filtered.length,
+                ),
+              ),
+            ),
+
+          const SliverToBoxAdapter(
+            child: SizedBox(height: AppSpacing.xxl),
+          ),
+        ],
       ),
     );
   }
 }
 
-// ─── History Section ───
+// ─── Grid Item ───
 
-class _HistorySection extends StatelessWidget {
-  const _HistorySection({required this.type, required this.entries});
-  final HistoryType type;
-  final List<HistoryEntry> entries;
-
-  IconData get _icon {
-    switch (type) {
-      case HistoryType.background:
-        return Icons.auto_fix_high_outlined;
-      case HistoryType.image:
-        return Icons.image_outlined;
-      case HistoryType.video:
-        return Icons.videocam_outlined;
-      case HistoryType.pdf:
-        return Icons.picture_as_pdf_outlined;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(_icon, size: 18, color: theme.colorScheme.onSurfaceVariant),
-            const SizedBox(width: AppSpacing.xs),
-            Text(
-              type.label,
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: AppSpacing.xs),
-        ...entries.map((entry) => _HistoryTile(entry: entry)),
-        const SizedBox(height: AppSpacing.lg),
-      ],
-    );
-  }
-}
-
-class _HistoryTile extends ConsumerWidget {
-  const _HistoryTile({required this.entry});
+class _GridItem extends ConsumerWidget {
+  const _GridItem({required this.entry});
   final HistoryEntry entry;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final file = File(entry.resultPath);
-    final dateFormat = DateFormat('dd/MM/yyyy HH:mm');
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-      child: Card(
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => _showDetailSheet(context, ref),
-          child: Padding(
-            padding: AppSpacing.paddingAllSm,
-            child: Row(
-              children: [
-                ClipRRect(
-                  borderRadius: AppSpacing.borderRadiusSmall,
-                  child: SizedBox(
-                    width: 48,
-                    height: 48,
-                    child: entry.type == HistoryType.pdf
-                        ? Container(
-                            color: const Color(0xFFD84315).withValues(alpha: 0.1),
-                            child: const Icon(
-                              Icons.picture_as_pdf_rounded,
-                              size: 24,
-                              color: Color(0xFFD84315),
-                            ),
-                          )
-                        : file.existsSync()
-                            ? Image.file(file, fit: BoxFit.cover)
-                            : Container(
-                                color: theme.colorScheme.surfaceContainerLow,
-                                child: Icon(
-                                  Icons.broken_image_outlined,
-                                  size: 20,
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        entry.originalName,
-                        style: theme.textTheme.bodyMedium,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${_formatSize(entry.resultSizeBytes)} · ${dateFormat.format(entry.createdAt)}',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  Icons.chevron_right,
-                  size: 20,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ],
+    return GestureDetector(
+      onTap: () => _showDetailSheet(context, ref),
+      child: Column(
+        children: [
+          // Preview
+          AspectRatio(
+            aspectRatio: 4 / 4,
+            child: ClipRRect(
+              borderRadius: AppSpacing.borderRadiusMedium,
+              child: Container(
+                width: double.infinity,
+                color: theme.colorScheme.surfaceContainerLow,
+                child: _buildPreview(theme),
+              ),
             ),
           ),
-        ),
+          const SizedBox(height: AppSpacing.xs),
+
+          // Name
+          Text(
+            entry.originalName,
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 2),
+
+          // Date
+          Text(
+            _relativeDate(entry.createdAt),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
+          ),
+
+          // Type
+          Text(
+            entry.type.shortLabel,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _buildPreview(ThemeData theme) {
+    switch (entry.type) {
+      case HistoryType.pdf:
+        return Center(
+          child: Icon(
+            Icons.picture_as_pdf_rounded,
+            size: 40,
+            color: const Color(0xFFD84315).withValues(alpha: 0.8),
+          ),
+        );
+      case HistoryType.video:
+        return Center(
+          child: Icon(
+            Icons.videocam_rounded,
+            size: 40,
+            color: const Color(0xFF7B1FA2).withValues(alpha: 0.8),
+          ),
+        );
+      case HistoryType.image:
+      case HistoryType.background:
+        final file = File(entry.resultPath);
+        if (file.existsSync()) {
+          return Image.file(file, fit: BoxFit.cover);
+        }
+        return Center(
+          child: Icon(
+            Icons.broken_image_outlined,
+            size: 32,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        );
+    }
   }
 
   void _showDetailSheet(BuildContext context, WidgetRef ref) {
@@ -378,6 +328,29 @@ class _HistoryDetailSheet extends StatelessWidget {
                               ],
                             ),
                           )
+                        : entry.type == HistoryType.video
+                            ? Padding(
+                                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.videocam_rounded,
+                                      size: 64,
+                                      color: const Color(0xFF7B1FA2).withValues(alpha: 0.8),
+                                    ),
+                                    const SizedBox(height: AppSpacing.sm),
+                                    Text(
+                                      entry.originalName,
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              )
                         : file.existsSync()
                             ? Image.file(file, fit: BoxFit.contain)
                             : Center(
@@ -441,29 +414,16 @@ class _HistoryDetailSheet extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: SizedBox(
-                        height: 48,
-                        child: ElevatedButton.icon(
-                          onPressed: () => entry.type == HistoryType.pdf
-                              ? _share(context)
-                              : _saveToGallery(context),
-                          icon: Icon(
-                            entry.type == HistoryType.pdf
-                                ? Icons.share_rounded
-                                : Icons.download_rounded,
-                            size: 18,
-                          ),
-                          label: Text(
-                            entry.type == HistoryType.pdf
-                                ? 'Partager'
-                                : 'Enregistrer',
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: AppSpacing.borderRadiusFull,
-                            ),
-                          ),
-                        ),
+                      child: AppButton(
+                        onPressed: () => entry.type == HistoryType.pdf
+                            ? _share(context)
+                            : _saveToGallery(context),
+                        label: entry.type == HistoryType.pdf
+                            ? 'Partager'
+                            : 'Enregistrer',
+                        icon: entry.type == HistoryType.pdf
+                            ? Icons.share_rounded
+                            : Icons.download_rounded,
                       ),
                     ),
                     const SizedBox(width: AppSpacing.sm),
@@ -534,9 +494,12 @@ class _HistoryDetailSheet extends StatelessWidget {
     try {
       await ImageGallerySaverPlus.saveFile(entry.resultPath);
       navigator.pop();
+      final msg = entry.type == HistoryType.video
+          ? 'Vidéo enregistrée'
+          : 'Image enregistrée';
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Image enregistrée'),
+        SnackBar(
+          content: Text(msg),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -623,9 +586,9 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxxl),
+    return Center(
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
             Icons.history_outlined,

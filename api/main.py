@@ -416,11 +416,22 @@ async def remove_object(
 
 ALLOWED_VIDEO_EXTENSIONS = {"mp4", "mov", "avi", "mkv"}
 
+VIDEO_QUALITY_PRESETS = {
+    "low":    {"crf": "34", "scale": "480",  "preset": "fast", "audio_bitrate": "48k"},
+    "medium": {"crf": "30", "scale": "720",  "preset": "fast", "audio_bitrate": "64k"},
+    "high":   {"crf": "26", "scale": "1080", "preset": "fast", "audio_bitrate": "96k"},
+}
+
+
 @app.post("/api/compress-video")
 async def compress_video(
     file: UploadFile = File(...),
     quality: str = Query(default="medium")
 ):
+    import subprocess
+
+    preset = VIDEO_QUALITY_PRESETS.get(quality.lower(), VIDEO_QUALITY_PRESETS["medium"])
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_in:
         shutil.copyfileobj(file.file, temp_in)
         temp_input_path = temp_in.name
@@ -428,43 +439,63 @@ async def compress_video(
     temp_output_path = temp_input_path.replace(".mp4", "_compressed.mp4")
 
     try:
-        clip = VideoFileClip(temp_input_path)
-
-        settings = {
-            "low": {"w": 360, "bitrate": "500k"},
-            "medium": {"w": 480, "bitrate": "1000k"},
-            "high": {"w": 720, "bitrate": "2500k"}
-        }
-        target = settings.get(quality, settings["medium"])
-
-
-        if clip.w > target["w"]:
-            clip = clip.resized(width=target["w"])
-
-        clip.write_videofile(
+        # ffmpeg direct: CRF-based encoding (better quality/size ratio than fixed bitrate)
+        # scale filter: downscale only if wider than target, keep aspect ratio
+        scale_filter = f"scale='min({preset['scale']},iw)':-2"
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", temp_input_path,
+            "-vf", scale_filter,
+            "-c:v", "libx264",
+            "-crf", preset["crf"],
+            "-preset", preset["preset"],
+            "-c:a", "aac",
+            "-b:a", preset["audio_bitrate"],
+            "-movflags", "+faststart",
             temp_output_path,
-            codec="libx264",
-            audio_codec="aac",
-            bitrate=target["bitrate"],
-            preset="ultrafast",
-            logger=None
+        ]
+
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600,
         )
-        clip.close()
+        if result.returncode != 0:
+            logger.error(f"ffmpeg stderr: {result.stderr}")
+            raise RuntimeError(f"ffmpeg failed: {result.stderr[-500:]}")
+
+        original_size = os.path.getsize(temp_input_path)
+        compressed_size = os.path.getsize(temp_output_path)
+
+        # If compressed is larger, return the original file instead
+        if compressed_size >= original_size:
+            serve_path = temp_input_path
+            cleanup_path = temp_output_path
+            final_size = original_size
+        else:
+            serve_path = temp_output_path
+            cleanup_path = temp_input_path
+            final_size = compressed_size
+
+        os.remove(cleanup_path)
 
         def iterfile():
-            with open(temp_output_path, "rb") as f:
+            with open(serve_path, "rb") as f:
                 yield from f
-            os.remove(temp_input_path)
-            os.remove(temp_output_path)
+            os.remove(serve_path)
 
         return StreamingResponse(
             iterfile(),
             media_type="video/mp4",
-            headers={"Content-Disposition": "attachment; filename=compressed.mp4"}
+            headers={
+                "Content-Disposition": "attachment; filename=compressed.mp4",
+                "X-Original-Size": str(original_size),
+                "X-Compressed-Size": str(final_size),
+            },
         )
 
     except Exception as e:
-        if os.path.exists(temp_input_path): os.remove(temp_input_path)
+        for p in (temp_input_path, temp_output_path):
+            if os.path.exists(p):
+                os.remove(p)
         logger.error(f"Erreur vidéo : {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
